@@ -47,18 +47,29 @@ async def upload_template(
         # it is converted once here at registration time rather than on every
         # document generation.
         import httpx
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post(
-                f"{settings.converter_url}/doc-to-docx",
-                files={"file": (file.filename, data)},
-                headers={"X-Internal-Token": settings.internal_token},
-            )
-            if resp.status_code != 200:
-                raise HTTPException(
-                    422, "'.doc' faylni o'girish imkoni bo'lmadi. Word'da "
-                         "'.docx' sifatida saqlab qayta yuklang.")
-            data = resp.content
-            conversion_report = {"from": "doc", "to": "docx"}
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                resp = await client.post(
+                    f"{settings.converter_url}/doc-to-docx",
+                    files={"file": (file.filename, data)},
+                    headers={"X-Internal-Token": settings.internal_token},
+                )
+        except httpx.RequestError as exc:
+            # The converter is optional in the default deployment, so an
+            # unreachable one is a configuration state to explain, not a
+            # 500. The user has a one-step way out: re-save as .docx.
+            raise HTTPException(
+                422,
+                "'.doc' formatini o'girish xizmati ishlamayapti. Faylni "
+                "Word'da '.docx' sifatida saqlab qayta yuklang, yoki "
+                "converter servisini yoqing (make dev-full).",
+            ) from exc
+        if resp.status_code != 200:
+            raise HTTPException(
+                422, "'.doc' faylni o'girish imkoni bo'lmadi. Word'da "
+                     "'.docx' sifatida saqlab qayta yuklang.")
+        data = resp.content
+        conversion_report = {"from": "doc", "to": "docx"}
 
     try:
         cleaned, sanitation = sanitize_office(data)
@@ -76,6 +87,10 @@ async def upload_template(
             "variables": [asdict(v) for v in spec.variables],
             "required_fields": spec.required_fields,
             "optional_fields": spec.optional_fields,
+            # Values no document can supply. The upload screen turns these
+            # into a manual-entry form: a salary or a contract number is
+            # never going to come off a passport photo.
+            "extra_fields": spec.extra_fields,
             "loops": spec.loops,
         },
         sanitization_report={"findings": sanitation.findings,
@@ -91,6 +106,7 @@ async def upload_template(
         "name": tpl.name,
         "required_fields": spec.required_fields,
         "optional_fields": spec.optional_fields,
+        "extra_fields": spec.extra_fields,
         # Surfaced so the author learns that Word had fragmented their tags and
         # the system repaired them, instead of silently benefiting from it.
         "repaired_tags": spec.repaired_tags,
@@ -109,6 +125,7 @@ async def list_templates(session: AsyncSession = Depends(get_session)) -> list[d
     return [{
         "id": t.id, "name": t.name,
         "required_fields": t.spec.get("required_fields", []),
+        "extra_fields": t.spec.get("extra_fields", []),
         "output_formats": t.output_formats,
         "is_published": t.is_published,
     } for t in rows]

@@ -14,10 +14,15 @@ jobs:
         run: pip install -r requirements/dev.txt
 
       - name: Lint
-        run: ruff check packages apps
+        run: ruff check packages apps scripts tests
 
       - name: Types
         run: mypy packages/schema packages/llm --ignore-missing-imports
+
+      # First, because it imports every FastAPI app. A route that only fails
+      # at import time is caught here rather than by a failed deploy.
+      - name: Service startup
+        run: pytest tests -q
 
       - name: Tests
         run: pytest packages -q
@@ -31,6 +36,18 @@ jobs:
           pytest packages/ml/tests/test_mrz.py::TestNeverSilentlyWrong -q
           pytest packages/docgen/tests/test_docgen.py::TestSandboxSSTI -q
           PYTHONPATH=.:apps/api pytest apps/api/tests/test_security.py -q
+          pytest packages/llm/tests/test_cache.py -q
+          pytest packages/ml/tests/test_classify.py -q
+          pytest packages/llm/tests/test_prompts.py -q
+
+      # The generated artefacts must match their generators. A hand-edited
+      # .docx or notebook silently diverges otherwise.
+      - name: Generated artefacts are up to date
+        run: |
+          python scripts/build_templates.py
+          python scripts/build_classifier_notebook.py
+          git diff --exit-code --stat -- training/ || \
+            (echo "training/ is out of date: run make notebooks" && exit 1)
 
       - name: Secret scan
         uses: gitleaks/gitleaks-action@v2

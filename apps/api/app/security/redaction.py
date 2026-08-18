@@ -51,12 +51,12 @@ def redact_obj(obj: Any, _depth: int = 0) -> Any:
     if isinstance(obj, dict):
         out = {}
         for k, v in obj.items():
-            if str(k).lower() in SENSITIVE_KEYS and isinstance(v, (str, int)):
+            if str(k).lower() in SENSITIVE_KEYS and isinstance(v, str | int):
                 out[k] = "<REDACTED>"
             else:
                 out[k] = redact_obj(v, _depth + 1)
         return out
-    if isinstance(obj, (list, tuple)):
+    if isinstance(obj, list | tuple):
         return [redact_obj(v, _depth + 1) for v in obj]
     return obj
 

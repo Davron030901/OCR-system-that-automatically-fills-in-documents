@@ -38,10 +38,24 @@ def get_pipeline() -> ExtractionPipeline:
         ocr = _build_ocr()
         mapper = _build_mapper() if LLM_ENABLED else None
         _pipeline = ExtractionPipeline(
-            ocr=ocr, mapper=mapper,
+            ocr=ocr, mapper=mapper, classifier=_build_classifier(),
             config=PipelineConfig(enable_l2=LLM_ENABLED, enable_l3=ENABLE_L3),
         )
     return _pipeline
+
+
+def _build_classifier():
+    """Optional. Returns None when CLASSIFIER_MODEL_PATH is unset or missing.
+
+    Without it the pipeline trusts the caller's document-type hint and still
+    extracts; it just loses the ability to refuse an unrecognised photo up
+    front. Train one with training/01_classifier.ipynb and point the env var at
+    the exported ONNX file.
+    """
+    from packages.ml.classify import load_classifier
+    clf = load_classifier()
+    log.info("classifier %s", "loaded" if clf else "disabled")
+    return clf
 
 
 def _build_ocr():
@@ -72,7 +86,14 @@ async def healthz() -> dict:
 
 @app.get("/readyz")
 async def readyz() -> dict:
-    return {"status": "ready", "llm_enabled": LLM_ENABLED, "l3_vision": ENABLE_L3}
+    pipeline = get_pipeline()
+    return {
+        "status": "ready",
+        "llm_enabled": LLM_ENABLED,
+        "l3_vision": ENABLE_L3,
+        "ocr": pipeline.ocr is not None,
+        "classifier": pipeline.classifier is not None,
+    }
 
 
 @app.post("/extract", dependencies=[Depends(require_internal)])

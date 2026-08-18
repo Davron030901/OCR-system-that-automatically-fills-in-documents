@@ -23,6 +23,10 @@ services:
       MINIO_ROOT_PASSWORD: minioadmin
     ports: ["9000:9000", "9001:9001"]
     volumes: [miniodata:/data]
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      retries: 12
 
   api:
     build: { context: .., dockerfile: infra/Dockerfile.api }
@@ -36,18 +40,24 @@ services:
     ports: ["8000:8000"]
     depends_on:
       postgres: { condition: service_healthy }
+      minio: { condition: service_started }
 
   ml-service:
     build: { context: .., dockerfile: infra/Dockerfile.ml }
     env_file: [../.env]
     ports: ["8100:8100"]
-    # ONNX Runtime on CPU only. Sized to prove the service fits a small
-    # instance; if it OOMs here it will OOM in production.
-    deploy:
-      resources:
-        limits: { memory: 512M }
+    # ONNX Runtime on CPU only. Capped deliberately: if the service OOMs here
+    # it will OOM on a small production instance too, and finding that out
+    # locally is much cheaper.
+    mem_limit: 512m
 
+  # Opt-in. LibreOffice is ~400 MB and takes several minutes to build, and it
+  # is only needed for two things: converting a legacy .doc template once at
+  # registration time, and producing PDF output. With .docx templates and
+  # ENABLE_PDF_OUTPUT=false the whole system runs without it.
+  #   docker compose --profile converter up --build
   converter:
+    profiles: ["converter"]
     build: { context: .., dockerfile: infra/Dockerfile.converter }
     env_file: [../.env]
     ports: ["8200:8200"]

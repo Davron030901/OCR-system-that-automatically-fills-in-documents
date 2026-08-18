@@ -31,6 +31,8 @@ async def lifespan(app: FastAPI):
             "ENCRYPTION_KEY must be set in production. Extracted passport data "
             "is stored encrypted; refusing to start without a key.")
     log.info("starting %s (env=%s)", settings.app_name, settings.environment)
+    from app.db.bootstrap import bootstrap
+    await bootstrap()
     yield
 
 

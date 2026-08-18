@@ -8,7 +8,9 @@ from app.security.crypto import decrypt_json
 from app.services.storage import Storage, get_storage
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from packages.docgen.engine import TemplateRejected, render_docx
 from packages.schema.models import ExtractionResult
@@ -30,9 +32,14 @@ async def generate(req: GenerateRequest,
                    storage: Storage = Depends(get_storage)) -> dict:
     if req.output_format == "pdf" and not settings.enable_pdf_output:
         raise HTTPException(
-            422, "PDF chiqishi hozir o'chirilgan. DOCX formatida yuklab oling.")
+            422,
+            "PDF chiqishi o'chirilgan. DOCX formatida yuklab oling, yoki "
+            "converter servisini yoqib ENABLE_PDF_OUTPUT=true qiling "
+            "(make dev-full).")
 
-    job = await session.get(Job, req.job_id)
+    job = (await session.execute(
+        select(Job).where(Job.id == req.job_id)
+        .options(selectinload(Job.extraction)))).scalar_one_or_none()
     if job is None or job.extraction is None:
         raise HTTPException(404, "Ma'lumot topilmadi")
     tpl = await session.get(Template, req.template_id)
@@ -55,17 +62,22 @@ async def generate(req: GenerateRequest,
     content, fmt = filled.content, "docx"
     if req.output_format == "pdf":
         import httpx
-        async with httpx.AsyncClient(timeout=90.0) as client:
-            resp = await client.post(
-                f"{settings.converter_url}/docx-to-pdf",
-                files={"file": ("document.docx", content)},
-                headers={"X-Internal-Token": settings.internal_token},
-            )
-            if resp.status_code != 200:
-                raise HTTPException(
-                    503, "PDF yaratish xizmati hozir mavjud emas. "
-                         "DOCX formatida yuklab oling.")
-            content, fmt = resp.content, "pdf"
+        try:
+            async with httpx.AsyncClient(timeout=90.0) as client:
+                resp = await client.post(
+                    f"{settings.converter_url}/docx-to-pdf",
+                    files={"file": ("document.docx", content)},
+                    headers={"X-Internal-Token": settings.internal_token},
+                )
+        except httpx.RequestError as exc:
+            raise HTTPException(
+                503, "PDF yaratish xizmati ishlamayapti. Hujjat DOCX "
+                     "formatida tayyor — shu formatda yuklab oling.") from exc
+        if resp.status_code != 200:
+            raise HTTPException(
+                503, "PDF yaratish xizmati hozir mavjud emas. "
+                     "DOCX formatida yuklab oling.")
+        content, fmt = resp.content, "pdf"
 
     key = f"documents/{job.id}/{tpl.id}.{fmt}"
     await storage.put(key, content, "application/octet-stream")

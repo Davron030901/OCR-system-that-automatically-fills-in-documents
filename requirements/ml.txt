@@ -9,3 +9,8 @@ httpx==0.28.1
 rapidfuzz==3.11.0
 python-multipart==0.0.20
 pillow==11.1.0
+# packages/llm/cache.py encrypts cached model output at rest: it holds
+# answers about real documents, so it inherits the database's rules.
+cryptography==44.0.0
+# Optional. Without REDIS_URL the cache falls back to an in-process one.
+redis==5.2.1

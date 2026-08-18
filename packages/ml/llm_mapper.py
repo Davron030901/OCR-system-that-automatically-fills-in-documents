@@ -11,9 +11,12 @@ import json
 import os
 from typing import Any
 
-from packages.llm.base import LLMRequest, LLMTask
+from packages.llm import prompts
+from packages.llm.base import LLMProvider, LLMRequest, LLMTask
+from packages.llm.cache import ResponseCache, build_cache
 from packages.llm.grounding import verify
 from packages.llm.keypool import KeyPool, ManagedKey
+from packages.llm.prompts import Prompt
 from packages.llm.providers.config import (
     GEMINI_FREE_CAPS,
     GEMINI_FREE_MODEL,
@@ -32,22 +35,11 @@ from packages.llm.providers.http_providers import (
 )
 from packages.llm.router import BudgetGuard, LLMRouter
 
-SYSTEM_PROMPT = """You map text recognised from Uzbek identity and education \
-documents onto a fixed schema.
-
-Rules you must follow exactly:
-1. Copy values VERBATIM from the supplied text. Never translate, correct,
-   reformat or complete them.
-2. If a field is not present in the text, return null. Do NOT infer it from
-   context, and do NOT guess. A null is correct; an invention is a defect.
-3. Dates must be returned as YYYY-MM-DD, converted only from a date that is
-   actually present in the text.
-4. Uzbek documents mix Latin and Cyrillic script and Uzbek, Russian and
-   English labels. Common labels: Familiya/Фамилия (surname),
-   Ismi/Имя (given name), Otasining ismi/Отчество (patronymic),
-   Tug'ilgan sanasi/Дата рождения (birth date), JSHSHIR/PINFL (14-digit
-   personal number), Seriya/Серия (document number).
-5. Return only the requested fields as a single JSON object."""
+# Prompts live in packages/llm/prompts/ as versioned files, not as a constant
+# here. A prompt edit changes model behaviour as much as a model swap does, so
+# it needs a version number that travels with every response, a pin so a
+# rollout can be held on the previous one, and a regression eval set. See
+# packages/llm/prompts/registry.py.
 
 
 def build_pool() -> KeyPool:
@@ -80,7 +72,11 @@ def _split(raw: str) -> list[str]:
 
 
 def build_router() -> LLMRouter:
-    providers = []
+    # Annotated as the protocol rather than inferred from the first append.
+    # Without this mypy infers list[OpenAIProvider] from line one and then
+    # rejects every other provider, which is exactly backwards for a list
+    # whose entire purpose is holding heterogeneous providers.
+    providers: list[LLMProvider] = []
     if key := os.getenv("OPENAI_API_KEY"):
         providers.append(OpenAIProvider(key, OPENAI_MODEL, OPENAI_CAPS))
     free = _split(os.getenv("GEMINI_FREE_KEYS", ""))
@@ -112,18 +108,48 @@ def _schema_for(fields: list[str]) -> dict[str, Any]:
     }
 
 
+def prompt_for(doc_type: str) -> Prompt:
+    """Pick the prompt registered for this document type.
+
+    Falls back to the identity-document prompt, which is the conservative
+    choice: its rules are the strictest in the registry, so an unrecognised
+    document type gets more caution rather than less.
+    """
+    name = ("diploma_extract" if "diploma" in doc_type.lower()
+            else "id_visual_zone")
+    return prompts.load(name)
+
+
 class CascadeMapper:
     """Implements the LLMMapper protocol used by ExtractionPipeline."""
 
-    def __init__(self, router: LLMRouter | None = None):
+    def __init__(self, router: LLMRouter | None = None,
+                 cache: ResponseCache | None = None,
+                 tenant: str = "default"):
         self.router = router or build_router()
-        self.prompt_version = "v1"
+        # Retries are the common case: a user who dislikes a result uploads the
+        # same photo again. Without the cache that second attempt pays full
+        # price for a byte-identical request.
+        self.cache = cache if cache is not None else build_cache()
+        self.tenant = tenant
 
     async def map_text(self, ocr_text: str, doc_type: str,
                        unresolved: list[str]) -> tuple[dict[str, Any], float]:
         fields = unresolved[:25]
+        prompt = prompt_for(doc_type)
+        payload = f"{doc_type}\n{json.dumps(fields)}\n{ocr_text}"
+
+        cached = self.cache.get("router", "cascade", prompt.id, payload,
+                                tenant=self.tenant)
+        if cached is not None:
+            # A cache hit still goes through grounding. The stored answer was
+            # verified once, but re-verifying costs microseconds and means a
+            # grounding fix applies to cached answers too.
+            cleaned, _ = verify(cached, ocr_text)
+            return {k: v for k, v in cleaned.items() if v is not None}, 0.0
+
         req = LLMRequest(
-            system=SYSTEM_PROMPT,
+            system=prompt.text,
             user_text=(
                 f"Document type: {doc_type}\n\n"
                 f"Recognised text:\n---\n{ocr_text}\n---\n\n"
@@ -131,10 +157,13 @@ class CascadeMapper:
             json_schema=_schema_for(fields),
             task=LLMTask.TEXT_MAPPING,
             contains_real_pii=True,     # it is a real document; fail closed
-            prompt_version=self.prompt_version,
+            prompt_version=prompt.id,
         )
         resp = await self.router.complete(req)
         raw = resp.parsed or {}
+        if raw:
+            self.cache.set("router", "cascade", prompt.id, payload, raw,
+                           tenant=self.tenant)
         # Nothing the model returns is trusted until it is found in the text.
         cleaned, _report = verify(raw, ocr_text)
         return {k: v for k, v in cleaned.items() if v is not None}, resp.cost_usd
@@ -142,18 +171,24 @@ class CascadeMapper:
     async def map_image(self, image_bytes: bytes, doc_type: str,
                         unresolved: list[str]) -> tuple[dict[str, Any], float]:
         fields = unresolved[:25]
+        prompt = prompts.load("vision_fallback")
         req = LLMRequest(
-            system=SYSTEM_PROMPT,
+            system=prompt.text,
             user_text=(f"Document type: {doc_type}\n"
                        f"Return these fields: {json.dumps(fields)}"),
             images=[image_bytes],
             json_schema=_schema_for(fields),
             task=LLMTask.VISION,
             contains_real_pii=True,
-            prompt_version=self.prompt_version,
+            prompt_version=prompt.id,
         )
         resp = await self.router.complete(req)
         # No local text to ground against here, which is exactly why L3 is a
         # last resort and its output is given lower confidence upstream.
-        return {k: v for k, v in (resp.parsed or {}).items() if v is not None}, \
-            resp.cost_usd
+        # The vision prompt returns {"values": ..., "legible": ...}; a field
+        # the model itself marked illegible is dropped rather than trusted.
+        parsed = resp.parsed or {}
+        values = parsed.get("values", parsed)
+        legible = parsed.get("legible", {})
+        return ({k: v for k, v in values.items()
+                 if v is not None and legible.get(k, True)}, resp.cost_usd)

@@ -330,6 +330,10 @@ class TemplateSpec:
     conditionals: list[str] = field(default_factory=list)
     required_fields: list[str] = field(default_factory=list)
     optional_fields: list[str] = field(default_factory=list)
+    # Names under the `extra.` namespace: values no document can supply, which
+    # the user types in. The upload screen builds its manual-entry form from
+    # this list.
+    extra_fields: list[str] = field(default_factory=list)
     unknown_variables: list[tuple[str, str | None]] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     repaired_tags: list[str] = field(default_factory=list)
@@ -410,6 +414,14 @@ def analyze(docx_bytes: bytes, name: str = "") -> tuple[bytes, TemplateSpec]:
     # these as unknown -- and worse, suggesting "education.graduation_year"
     # for "today.year" -- would train authors to ignore the warnings.
     context_builtins = {"today", "doc_type", "now"}
+    # `extra.*` is the namespace for values the USER types in — a salary, a
+    # contract number, a job title. Those are not extracted from a document and
+    # by definition are not in the canonical schema, so they are neither
+    # unknown nor required. Reporting them, and suggesting
+    # "documents[0].doc_number" for "extra.contract_number", would be actively
+    # harmful: it invites an author to wire passport data into a free-text
+    # field. They are collected separately so the upload UI can prompt for them.
+    user_supplied_root = "extra"
 
     for raw in _VAR_RE.findall(text):
         parts = [p.strip() for p in raw.split("|")]
@@ -424,6 +436,9 @@ def analyze(docx_bytes: bytes, name: str = "") -> tuple[bytes, TemplateSpec]:
         root = path.split(".")[0].split("[")[0]
         if root in loop_vars or root in context_builtins:
             continue                      # loop alias or renderer-provided value
+        if root == user_supplied_root:
+            spec.extra_fields.append(path.split(".", 1)[-1])
+            continue
 
         normalised = path.replace("[0]", ".0")
         if normalised not in known and path not in known:
@@ -441,6 +456,7 @@ def analyze(docx_bytes: bytes, name: str = "") -> tuple[bytes, TemplateSpec]:
 
     spec.required_fields = sorted(set(spec.required_fields))
     spec.optional_fields = sorted(set(spec.optional_fields))
+    spec.extra_fields = sorted(set(spec.extra_fields))
     return fixed, spec
 
 
@@ -496,8 +512,15 @@ def build_context(result: ExtractionResult, extra: dict | None = None,
         "education": convert(result.education) if result.education else None,
         "today": date.today(),
         "doc_type": str(result.doc_type),
+        # Values the user typed in, exposed under their own namespace so a
+        # template can say where a value came from: {{ extra.salary }} is
+        # user input, {{ person.pinfl }} came off the document. Always
+        # present, even when empty, so {{ extra.foo|default('') }} resolves
+        # instead of raising "'extra' is undefined" mid-render.
+        "extra": dict(extra or {}),
     }
     if extra:
+        # Also merged flat, for templates written before the namespace existed.
         ctx.update(extra)
     return ctx, missing
 

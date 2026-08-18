@@ -19,7 +19,9 @@ from app.security.validation import UploadRejected, validate_upload
 from app.services.storage import Storage, get_storage
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 router = APIRouter(prefix="/api/v1/jobs", tags=["jobs"])
 
@@ -73,7 +75,11 @@ async def _process(job_id: str) -> None:
     from app.db.session import session_factory
 
     async with session_factory() as session:
-        job = await session.get(Job, job_id)
+        # Eager-load uploads: a lazy load here raises MissingGreenlet, because
+        # SQLAlchemy cannot emit IO from an attribute access under asyncio.
+        job = (await session.execute(
+            select(Job).where(Job.id == job_id)
+            .options(selectinload(Job.uploads)))).scalar_one_or_none()
         if job is None:
             return
         storage = get_storage()
@@ -126,7 +132,9 @@ async def _process(job_id: str) -> None:
 async def get_job(job_id: str,
                   session: AsyncSession = Depends(get_session),
                   settings: Settings = Depends(get_settings)) -> dict:
-    job = await session.get(Job, job_id)
+    job = (await session.execute(
+        select(Job).where(Job.id == job_id)
+        .options(selectinload(Job.extraction)))).scalar_one_or_none()
     if job is None:
         raise HTTPException(404, "Topilmadi")
 
@@ -158,6 +166,8 @@ async def stream_job(job_id: str,
             if job is None:
                 yield 'event: error\ndata: {"error":"not_found"}\n\n'
                 return
+            # The worker commits from a different session, so the identity map
+            # here is stale until we expire and re-read it.
             await session.refresh(job)
             yield (f"data: {json.dumps({'status': job.status, 'label': STAGES.get(job.status, job.status)})}\n\n")
             if job.status in ("ok", "review_needed", "failed", "bad_quality",
@@ -178,7 +188,9 @@ async def correct_fields(job_id: str, corrections: dict,
     the audit trail can distinguish what a person asserted from what a model
     inferred.
     """
-    job = await session.get(Job, job_id)
+    job = (await session.execute(
+        select(Job).where(Job.id == job_id)
+        .options(selectinload(Job.extraction)))).scalar_one_or_none()
     if job is None or job.extraction is None:
         raise HTTPException(404, "Topilmadi")
 
@@ -205,12 +217,20 @@ async def correct_fields(job_id: str, corrections: dict,
     return {"job_id": job_id, "remaining_review": remaining}
 
 
-@router.delete("/{job_id}", status_code=204)
+# response_model=None is required, not cosmetic. This module uses
+# `from __future__ import annotations`, so the `-> None` return annotation
+# reaches FastAPI as the string "None", which it resolves to NoneType — a
+# truthy class. FastAPI then believes the route has a response body and
+# asserts, because 204 must not have one. Setting it explicitly stops the
+# annotation from being inspected at all.
+@router.delete("/{job_id}", status_code=204, response_model=None)
 async def delete_job(job_id: str,
                      session: AsyncSession = Depends(get_session),
                      storage: Storage = Depends(get_storage)) -> None:
     """Right to erasure. Removes stored objects as well as database rows."""
-    job = await session.get(Job, job_id)
+    job = (await session.execute(
+        select(Job).where(Job.id == job_id)
+        .options(selectinload(Job.uploads)))).scalar_one_or_none()
     if job is None:
         return
     for upload in job.uploads:

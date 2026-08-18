@@ -32,7 +32,7 @@ export async function correctFields(id: string, corrections: Record<string, stri
 
 export async function listTemplates() {
   return json<Array<{ id: string; name: string; required_fields: string[];
-    output_formats: string[] }>>(
+    extra_fields: string[]; output_formats: string[] }>>(
     await fetch(`${BASE}/api/v1/templates`, { cache: "no-store" }));
 }
 
