@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.venv/
+.env
+.env.local
+node_modules/
+.next/
+dist/
+*.onnx
+*.pt
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+/tmp/
+eval/golden_set/*
+!eval/golden_set/README.md

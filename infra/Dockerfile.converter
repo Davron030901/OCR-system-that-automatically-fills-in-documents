@@ -1,0 +1,20 @@
+FROM python:3.12-slim
+ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
+
+# Fonts matter: without Noto/DejaVu the Uzbek turned-comma (U+02BB) in Oʻ and
+# Gʻ renders as an empty box in generated PDFs.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      libreoffice-writer fonts-noto-core fonts-dejavu fonts-liberation \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /srv
+COPY requirements/converter.txt ./requirements.txt
+RUN pip install -r requirements.txt
+COPY apps/converter ./apps/converter
+
+RUN useradd -m -u 10001 appuser && chown -R appuser /srv
+USER appuser
+
+ENV PYTHONPATH=/srv:/srv/apps/converter
+EXPOSE 8200
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8200", "--app-dir", "apps/converter"]

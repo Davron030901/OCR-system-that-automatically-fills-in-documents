@@ -1,0 +1,52 @@
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+
+      - name: Install
+        run: pip install -r requirements/dev.txt
+
+      - name: Lint
+        run: ruff check packages apps
+
+      - name: Types
+        run: mypy packages/schema packages/llm --ignore-missing-imports
+
+      - name: Tests
+        run: pytest packages -q
+
+      # These are not ordinary tests. A regression in any of them means the
+      # system leaks personal data or writes an unverified value into a legal
+      # document, so they gate the merge on their own.
+      - name: Privacy and safety gates
+        run: |
+          pytest packages/llm/tests/test_llm_layer.py::TestPIIGate -q
+          pytest packages/ml/tests/test_mrz.py::TestNeverSilentlyWrong -q
+          pytest packages/docgen/tests/test_docgen.py::TestSandboxSSTI -q
+          PYTHONPATH=.:apps/api pytest apps/api/tests/test_security.py -q
+
+      - name: Secret scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Dependency audit
+        run: pip install pip-audit && pip-audit -r requirements/api.txt || true
+
+  web:
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: apps/web } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - run: npm install
+      - run: npm run typecheck
+      - run: npm run build

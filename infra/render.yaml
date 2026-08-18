@@ -1,0 +1,60 @@
+# Render blueprint.
+#
+# ⚠️ LEGAL NOTE — read docs/LEGAL.md before using this in production.
+# Uzbek law requires personal data of Uzbek citizens to be stored on servers
+# located in Uzbekistan. Render's regions do not satisfy that. This blueprint
+# is appropriate for demo and testing; production needs local hosting or the
+# on-prem bundle in infra/onprem/.
+services:
+  - type: web
+    name: ocr-api
+    runtime: docker
+    dockerfilePath: ./infra/Dockerfile.api
+    plan: starter          # free tier's 512 MB and cold starts are too tight
+    healthCheckPath: /healthz
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: ENCRYPTION_KEY
+        sync: false        # set in the dashboard, never in the repo
+      - key: JWT_SECRET
+        sync: false
+      - key: INTERNAL_TOKEN
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: GEMINI_PAID_KEYS
+        sync: false
+      - key: DATABASE_URL
+        sync: false        # Supabase or Neon; Render's free DB expires
+      - key: ML_SERVICE_URL
+        fromService: { type: pserv, name: ocr-ml, property: hostport }
+      - key: CONVERTER_URL
+        fromService: { type: pserv, name: ocr-converter, property: hostport }
+
+  - type: pserv
+    name: ocr-ml
+    runtime: docker
+    dockerfilePath: ./infra/Dockerfile.ml
+    plan: starter
+    envVars:
+      - key: INTERNAL_TOKEN
+        sync: false
+      - key: LLM_ENABLED
+        value: "true"
+      - key: ENABLE_L3_VISION
+        value: "false"
+
+  - type: pserv
+    name: ocr-converter
+    runtime: docker
+    dockerfilePath: ./infra/Dockerfile.converter
+    plan: starter
+    envVars:
+      - key: INTERNAL_TOKEN
+        sync: false
+
+  - type: redis
+    name: ocr-redis
+    plan: starter
+    ipAllowList: []

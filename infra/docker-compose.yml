@@ -1,0 +1,63 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ocr
+      POSTGRES_PASSWORD: ocr
+      POSTGRES_DB: ocr
+    ports: ["5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ocr"]
+      interval: 5s
+
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+
+  minio:
+    image: minio/minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports: ["9000:9000", "9001:9001"]
+    volumes: [miniodata:/data]
+
+  api:
+    build: { context: .., dockerfile: infra/Dockerfile.api }
+    env_file: [../.env]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://ocr:ocr@postgres:5432/ocr
+      REDIS_URL: redis://redis:6379/0
+      STORAGE_ENDPOINT: http://minio:9000
+      ML_SERVICE_URL: http://ml-service:8100
+      CONVERTER_URL: http://converter:8200
+    ports: ["8000:8000"]
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  ml-service:
+    build: { context: .., dockerfile: infra/Dockerfile.ml }
+    env_file: [../.env]
+    ports: ["8100:8100"]
+    # ONNX Runtime on CPU only. Sized to prove the service fits a small
+    # instance; if it OOMs here it will OOM in production.
+    deploy:
+      resources:
+        limits: { memory: 512M }
+
+  converter:
+    build: { context: .., dockerfile: infra/Dockerfile.converter }
+    env_file: [../.env]
+    ports: ["8200:8200"]
+
+  web:
+    build: { context: ../apps/web, dockerfile: ../../infra/Dockerfile.web }
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+    ports: ["3000:3000"]
+
+volumes:
+  pgdata:
+  miniodata:
