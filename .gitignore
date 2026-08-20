@@ -6,8 +6,15 @@ __pycache__/
 node_modules/
 .next/
 dist/
+# Training checkpoints and stray exports stay out of the repo...
 *.onnx
 *.pt
+# ...except the one model the ml-service image needs. It is ~4 MB after int8
+# quantisation, which is small enough to version alongside the code that
+# depends on it. That keeps deployment to "git push" with no model registry,
+# no download at boot, and no way for the model and the thresholds that
+# calibrate it to drift apart.
+!models/classifier.onnx
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/

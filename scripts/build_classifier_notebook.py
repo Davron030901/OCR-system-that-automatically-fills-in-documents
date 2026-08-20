@@ -428,19 +428,66 @@ print(card)
 """)
 
 md("""
-## 6. Keyingi qadam
+## 6. Modelni yuklab olish va repo'ga qo'yish
 
-1. `classifier.onnx` va `labels.json` ni ml-service ko'radigan joyga qo'ying
-   (Drive'dan yuklab oling yoki Hugging Face Hub'ga push qiling).
-2. `.env` ga uchta o'zgaruvchini yozing (yuqoridagi chiqishdan).
-3. `make dev` → `/readyz` javobida `"classifier": true` ko'rinishi kerak.
-4. `eval/run_eval.py` ni golden set bilan ishlatib, klassifikator
-   `zero_touch_rate` ga qancha ta'sir qilganini o'lchang.
+Model **repo ichida** saqlanadi (`models/classifier.onnx`, ~4 MB).
+Model registry, Hugging Face yoki lokal kompyuterda training kerak emas:
 
-**Buni qachon qayta o'rgatish kerak:** yangi hujjat turi qo'shilganda,
-yoki eval'da `UNKNOWN_DOC_TYPE` xatosi 5% dan oshganda. Aniqlik yaxshi
-bo'lsa — tegmang. Yetarli darajadagi modelni yaxshilashga urinish bu
-loyihada vaqtni yo'qotishning eng keng tarqalgan usuli.
+```
+Colab T4  ──▶  yuklab olish  ──▶  git commit  ──▶  Render image
+```
+
+Quyidagi katak uchta faylni brauzeringizga yuklab beradi.
+""")
+
+code(r"""
+# Uchta faylni bevosita yuklab olish. Colab bularni brauzer orqali beradi —
+# Drive'ga qayta kirish yoki boshqa xizmat kerak emas.
+from google.colab import files as colab_files
+
+for name in ['classifier.onnx', 'labels.json', 'MODEL_CARD.md']:
+    src = f'{OUT}/{name}'
+    if os.path.exists(src):
+        print(f'{name}: {os.path.getsize(src)/1e6:.2f} MB')
+        colab_files.download(src)
+    else:
+        print(f'{name}: TOPILMADI — yuqoridagi kataklarni ishlating')
+
+print()
+print("Keyingi qadam — loyiha repo'sida (lokal training YO'Q):")
+print()
+print('  1. Uchala faylni repo ichidagi models/ papkasiga qo\'ying')
+print('  2. git add models/classifier.onnx models/labels.json models/MODEL_CARD.md')
+print('     git commit -m \"classifier: v1\"')
+print('     git push')
+print()
+print("  3. Render'da ocr-ml servisi env o'zgaruvchilari:")
+print('       CLASSIFIER_MODEL_PATH=/srv/models/classifier.onnx')
+print(f'       CLASSIFIER_MIN_CONFIDENCE={min_conf:.3f}')
+print(f'       CLASSIFIER_MAX_ENERGY={max_energy:.3f}')
+print()
+print('  4. Deploy tugagach: /readyz -> \"classifier\": true')
+print()
+print('  Chegaralar shu modelga xos. Qayta o\'rgatsangiz ikkalasini ham')
+print('  qayta yozing — eski chegara yangi model bilan ma\'nosiz.')
+""")
+
+md("""
+## 7. Qachon qayta o'rgatish kerak
+
+- Yangi hujjat turi qo'shilganda
+- Eval'da `UNKNOWN_DOC_TYPE` xatosi 5% dan oshganda
+- `unknown` klassi uchun **real** OOD rasmlar to'plangandan keyin
+  (sintetik shovqin bilan o'rgatilgan model real hujjat bo'lmagan
+  rasmlarda ishonchsiz)
+
+Aniqlik yaxshi bo'lsa — **tegmang**. Yetarli darajadagi modelni
+yaxshilashga urinish bu loyihada vaqtni yo'qotishning eng keng tarqalgan
+usuli.
+
+Modelni umuman o'rgatmaslik ham to'g'ri qaror: `models/classifier.onnx`
+bo'lmasa klassifikator o'chadi va tizim MRZ + LLM bilan ishlashda davom
+etadi. Yo'qoladigan narsa — tanilmagan rasmni oldindan rad etish.
 """)
 
 

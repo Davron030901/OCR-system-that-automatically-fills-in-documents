@@ -14,6 +14,7 @@ from typing import Any
 from packages.llm import prompts
 from packages.llm.base import LLMProvider, LLMRequest, LLMTask
 from packages.llm.cache import ResponseCache, build_cache
+from packages.llm.demo import contains_real_pii, is_demo_mode, provider_order
 from packages.llm.grounding import verify
 from packages.llm.keypool import KeyPool, ManagedKey
 from packages.llm.prompts import Prompt
@@ -81,6 +82,9 @@ def build_router() -> LLMRouter:
         providers.append(OpenAIProvider(key, OPENAI_MODEL, OPENAI_CAPS))
     free = _split(os.getenv("GEMINI_FREE_KEYS", ""))
     if free:
+        # Registered unconditionally, but reachable only for requests marked
+        # synthetic: GEMINI_FREE_CAPS.allows_real_pii is hardcoded False and
+        # PIIGate enforces it. In demo mode this is the primary provider.
         providers.append(GeminiProvider(free[0], GEMINI_FREE_MODEL,
                                         GEMINI_FREE_CAPS, name="gemini-free"))
     paid = _split(os.getenv("GEMINI_PAID_KEYS", ""))
@@ -90,12 +94,10 @@ def build_router() -> LLMRouter:
     if os.getenv("LOCAL_VLM_URL"):
         providers.append(LocalProvider(LOCAL_BASE_URL, LOCAL_MODEL, LOCAL_CAPS))
 
-    order = os.getenv("LLM_PROVIDER_ORDER",
-                      "local,openai,gemini-paid,gemini-free").split(",")
     return LLMRouter(
         providers, build_pool(),
         BudgetGuard(daily_limit_usd=float(os.getenv("LLM_DAILY_BUDGET_USD", 5))),
-        order=[o.strip() for o in order],
+        order=provider_order("local,openai,gemini-paid"),
     )
 
 
@@ -125,8 +127,14 @@ class CascadeMapper:
 
     def __init__(self, router: LLMRouter | None = None,
                  cache: ResponseCache | None = None,
-                 tenant: str = "default"):
+                 tenant: str = "default",
+                 demo_mode: bool | None = None):
         self.router = router or build_router()
+        # In demo mode requests are declared synthetic. That declaration is
+        # checked per request by PIIGate against the actual payload, so a real
+        # document uploaded to a demo is refused rather than sent to a
+        # free tier. See packages/llm/demo.py.
+        self.demo_mode = is_demo_mode() if demo_mode is None else demo_mode
         # Retries are the common case: a user who dislikes a result uploads the
         # same photo again. Without the cache that second attempt pays full
         # price for a byte-identical request.
@@ -156,7 +164,10 @@ class CascadeMapper:
                 f"Return these fields: {json.dumps(fields)}"),
             json_schema=_schema_for(fields),
             task=LLMTask.TEXT_MAPPING,
-            contains_real_pii=True,     # it is a real document; fail closed
+            # Production: True, so only cleared providers can be selected.
+            # Demo: False, which routes to the free tier AND arms the gate's
+            # heuristic against a genuinely real document slipping through.
+            contains_real_pii=contains_real_pii(self.demo_mode),
             prompt_version=prompt.id,
         )
         resp = await self.router.complete(req)
@@ -179,7 +190,9 @@ class CascadeMapper:
             images=[image_bytes],
             json_schema=_schema_for(fields),
             task=LLMTask.VISION,
-            contains_real_pii=True,
+            # Images are treated as real personal data by PIIGate no matter
+            # what this says, so L3 simply cannot run against a free tier.
+            contains_real_pii=contains_real_pii(self.demo_mode),
             prompt_version=prompt.id,
         )
         resp = await self.router.complete(req)

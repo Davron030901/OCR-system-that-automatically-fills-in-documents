@@ -27,6 +27,59 @@ qilmaydi. Kalitni API'ga qo'yish uni keraksiz joyda ochib qo'yish demak.
 
 ---
 
+## Demo rejim: MVP uchun sozlama
+
+MVP bepul Gemini kalitlari bilan ishlaydi. Buning uchun `DEMO_MODE=true` —
+`ocr-api` va `ocr-ml` da **ikkalasida ham**.
+
+### Demo rejim nima qiladi
+
+| | Demo (`true`) | Prod (`false`) |
+|---|---|---|
+| LLM provayder tartibi | `gemini-free` birinchi | `openai` birinchi, bepul umuman yo'q |
+| So'rov belgisi | `contains_real_pii=False` | `contains_real_pii=True` |
+| UI | Sariq ogohlantirish banneri | Banner yo'q |
+| Real pasport yuklansa | **Rad etiladi** (pastda) | Normal ishlanadi |
+
+### ⭐ Nima uchun bu xavfsiz
+
+Demo rejim PII darvozasini **o'chirmaydi**. Mexanizm teskari ishlaydi:
+
+1. Demo rejim so'rovni "sintetik" deb belgilaydi.
+2. `PIIGate` esa **haqiqiy yukni** tekshiradi. Matnda 14 xonali JSHSHIR,
+   `AA1234567` ko'rinishidagi hujjat raqami yoki MRZ qatori topilsa —
+   so'rov **rad etiladi**.
+
+Ya'ni foydalanuvchi ogohlantirishga qaramay real pasport yuklasa, ma'lumot
+bepul tier'ga **ketmaydi**. So'rov xato beradi, kaskad lokal bosqichlar bilan
+davom etadi, natija ko'rib chiqishga belgilanadi.
+
+**Demo rejimning buzilish usuli — rad etish, oshkor qilish emas.** Bu xossa
+darvozadan keladi (uni o'chirish imkoni yo'q), demo modulidan emas.
+
+Muhimi: L0 (MRZ) va L1 (qoidalar) **lokal** ishlaydi va hech qanday
+provayderga tegmaydi. Demo pasportning mashina o'qiydigan zonasini pullik
+kalitsiz ham mukammal o'qiydi. Faqat vizual zonani semantik xaritalash (L2)
+real hujjat uchun demo rejimida mavjud emas.
+
+Rasm yuborish (L3) demo rejimida umuman ishlamaydi: darvoza har qanday
+hujjat rasmini shartsiz real shaxsiy ma'lumot deb hisoblaydi.
+
+### Prod'ga o'tish
+
+```
+DEMO_MODE=false
+OPENAI_API_KEY=<pullik kalit>
+GEMINI_FREE_KEYS=            # bo'shatiladi
+```
+
+Uchta o'zgaruvchi, kod o'zgarmaydi.
+
+Testlar: `packages/llm/tests/test_demo_mode.py` — 21 ta test, jumladan
+"demo rejimida real pasport rad etiladi".
+
+---
+
 ## 0. Deploy'dan oldin: kalitlarni almashtiring
 
 Agar `.env.example` haqiqiy kalitlar bilan git'ga tushgan bo'lsa (bu loyihada
@@ -120,20 +173,26 @@ qoida — ikkinchi mudofaa chizig'i.
 | `DATABASE_URL` | `postgresql+asyncpg://...` |
 | `STORAGE_ENDPOINT` / `STORAGE_BUCKET` / `STORAGE_ACCESS_KEY` / `STORAGE_SECRET_KEY` | R2 dan |
 | `CORS_ORIGINS` | Hozircha `https://example.vercel.app` — 4-bo'limda haqiqiysiga almashtiriladi |
+| `DEMO_MODE` | `true` (blueprint'da tayyor). UI banneri shundan chiqadi |
 
 ### `ocr-ml` uchun
 
 | O'zgaruvchi | Qiymat |
 |---|---|
 | `INTERNAL_TOKEN` | API'dagi bilan **bir xil** |
-| `OPENAI_API_KEY` | Pullik kalit |
-| `GEMINI_PAID_KEYS` | Pullik Gemini kalitlari (bo'sh qoldirish mumkin) |
+| `GEMINI_FREE_KEYS` | Bepul kalitlar, vergul bilan — **MVP da asosiysi** |
+| `OPENAI_API_KEY` | Pullik kalit. Demo rejimida ixtiyoriy, bo'sh qoldiring |
+| `GEMINI_PAID_KEYS` | Bo'sh. Prod'ga o'tganda to'ldiriladi |
 | `LLM_CACHE_KEY` | 32-baytli tasodifiy satr |
 
-⚠️ **Bepul Gemini kalitlarini bu yerga yozmang.** Bepul tier ma'lumoti
-model o'rgatish uchun ishlatiladi. PII darvozasi ularni rad etadi — ya'ni
-ma'lumot chiqib ketmaydi, lekin so'rovlar xato beradi. To'g'ri yechim: prod'da
-bepul kalit umuman bo'lmasin. Ular `training/` va eval uchun.
+⚠️ Bepul kalitlar bu yerda **faqat `DEMO_MODE=true` bo'lgani uchun**
+ishlaydi. `DEMO_MODE=false` qilsangiz PII darvozasi ularni rad etadi va
+so'rovlar xato beradi — bu himoya, nosozlik emas. Prod'ga o'tayotganda
+`GEMINI_FREE_KEYS` ni bo'shatib, `OPENAI_API_KEY` ni to'ldiring.
+
+⚠️ Bir loyihadagi 10 ta bepul kalit **bitta kvotani bo'lishadi** (kvota
+loyiha darajasida hisoblanadi). Ular orasida aylanish hech narsa bermaydi.
+Demo uchun bittasi ham yetarli.
 
 ### `ocr-converter` uchun
 
@@ -254,37 +313,62 @@ qarang:
 
 ## 5. Klassifikator modelini qo'shish (ixtiyoriy)
 
-`training/01_classifier.ipynb` Colab T4 da `classifier.onnx` (~4 MB) chiqaradi.
-Modelsiz ham tizim ishlaydi — u shunchaki tanilmagan rasmni oldindan rad eta
-olmaydi.
+Model **repo ichida** saqlanadi. Lokal kompyuterda training yo'q, Hugging Face
+yo'q, model registry yo'q:
 
-Render'da doimiy disk `pserv` uchun mavjud, lekin eng oddiy yo'l — modelni
-image ichiga qo'shish:
-
-1. `classifier.onnx` va `labels.json` ni `models/` papkasiga qo'ying
-2. `.gitignore` da `*.onnx` bor — bu bittasi uchun istisno qiling:
-
-```gitignore
-*.onnx
-!models/classifier.onnx
+```
+Colab T4  ──▶  yuklab olish  ──▶  git commit  ──▶  Render image
 ```
 
-3. `infra/Dockerfile.ml` ga qo'shing:
+### Qadamlar
 
-```dockerfile
-COPY models/ ./models/
+1. `training/01_classifier.ipynb` ni Colab'da (Runtime → T4 GPU) oching va
+   oxirigacha ishlating. ~25-35 daqiqa.
+2. Oxirgi katak uchta faylni brauzeringizga yuklab beradi:
+   `classifier.onnx` (~4 MB), `labels.json`, `MODEL_CARD.md`.
+3. Ularni repo'ning `models/` papkasiga qo'ying va commit qiling:
+
+```bash
+git add models/classifier.onnx models/labels.json models/MODEL_CARD.md
+git commit -m "classifier: v1"
+git push
 ```
 
-4. `ocr-ml` env: `CLASSIFIER_MODEL_PATH=/srv/models/classifier.onnx`
-5. Notebook chop etgan ikki chegarani ham yozing:
-   `CLASSIFIER_MIN_CONFIDENCE`, `CLASSIFIER_MAX_ENERGY`
+4. Notebook chop etgan ikki chegarani Render'da `ocr-ml` ga yozing:
 
-⚠️ Chegaralar **modelga xos**. Modelni qayta o'rgatsangiz ularni ham qayta
-hisoblang — eski chegaralar yangi model bilan ma'nosiz.
+```
+CLASSIFIER_MIN_CONFIDENCE=0.612
+CLASSIFIER_MAX_ENERGY=-3.104
+```
 
-`/readyz` da `"classifier": true` chiqishi kerak.
+`CLASSIFIER_MODEL_PATH` allaqachon `/srv/models/classifier.onnx` ga
+qo'yilgan — `infra/Dockerfile.ml` `models/` ni image ichiga ko'chiradi.
 
----
+5. Deploy tugagach: `/readyz` → `"classifier": true`.
+
+### Nima uchun repo ichida
+
+4 MB — kod bilan birga versiyalash uchun yetarlicha kichik, va bu uch narsani
+beradi: deploy `git push` ga tenglashadi; model bilan uni kalibrlagan
+chegaralar bir joyda turadi (alohida bo'lsa jimgina bir-biriga mos kelmay
+qoladi); rollback esa oddiy commit'ga qaytish bo'ladi.
+
+`.gitignore` da `*.onnx` bloklangan, lekin `!models/classifier.onnx`
+istisnosi bor — tasodifiy checkpoint'lar tushmaydi.
+
+Model 20 MB dan oshsa bu qarorni qayta ko'rib chiqing.
+
+### ⚠️ Chegaralar modelga xos
+
+Ular validatsiya taqsimotidan olinadi. Modelni qayta o'rgatsangiz —
+ikkalasini ham qayta yozing. Eski chegara yangi model bilan ma'nosiz.
+
+### Modelsiz ham ishlaydi
+
+`models/classifier.onnx` bo'lmasa fayl topilmaydi, klassifikator o'chadi va
+tizim ishlashda davom etadi: MRZ va qoidalar lokal, LLM hujjat turini
+kontekstdan tushunadi. MVP'ni modelsiz ishga tushirish **normal** — bu bosqich
+ixtiyoriy deb belgilangani shuning uchun.
 
 ## 6. Narx
 
@@ -297,7 +381,8 @@ hisoblang — eski chegaralar yangi model bilan ma'nosiz.
 | Neon / Supabase | Free | $0 |
 | Cloudflare R2 | 10 GB gacha | $0 |
 | Vercel | Hobby | $0 |
-| LLM (1000 hujjat) | — | ~$1-7 |
+| LLM — demo (bepul Gemini) | — | $0 |
+| LLM — prod (1000 hujjat) | — | ~$1-7 |
 
 Jami taxminan **$25-35/oy**, converter'siz **$18-28/oy**.
 
@@ -319,7 +404,9 @@ sig'maydi.
 □ Shablon yuklandi, DOCX chiqdi
 □ CORS ishlaydi (brauzer konsolida xato yo'q)
 □ ENCRYPTION_KEY parol menejerida saqlandi
-□ Bepul Gemini kalitlari prod'da YO'Q
+□ DEMO_MODE ikkala servisda ham bir xil (api va ml)
+□ Demo bo'lsa: UI'da sariq ogohlantirish banneri ko'rinadi
+□ Prod'ga o'tganda: DEMO_MODE=false va bepul Gemini kalitlari o'chirilgan
 □ R2 bucket public EMAS
 □ R2 lifecycle qoidasi yoqilgan (uploads/ → 1 kun)
 □ Render log'larida shaxsiy ma'lumot ko'rinmaydi

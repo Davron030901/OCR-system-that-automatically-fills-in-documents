@@ -152,3 +152,56 @@ class TestUploadValidation:
         mime, digest = validate_upload(buf.getvalue(), 10_000_000)
         assert mime == "image/png"
         assert len(digest) == 64
+
+
+class TestDemoModeExposure:
+    """The demo banner is driven by the server, so the endpoint must be honest.
+
+    A frontend that renders "production" while the backend runs on free-tier
+    keys is worse than having no banner: it actively tells someone it is safe
+    to photograph their passport.
+
+    The endpoint function is awaited directly rather than through TestClient:
+    the app's lifespan waits for Postgres, and this behaviour has nothing to do
+    with the database.
+    """
+
+    @staticmethod
+    async def _config(monkeypatch, demo: str | None):
+        from app.config import get_settings
+        from app.routers.health import client_config
+        if demo is None:
+            monkeypatch.delenv("DEMO_MODE", raising=False)
+        else:
+            monkeypatch.setenv("DEMO_MODE", demo)
+        get_settings.cache_clear()
+        try:
+            return await client_config()
+        finally:
+            get_settings.cache_clear()
+
+    async def test_config_reports_production_when_demo_is_off(self, monkeypatch):
+        """Explicitly "false" rather than "unset".
+
+        Settings reads .env, and a developer's local .env legitimately has
+        DEMO_MODE=true. Asserting on absence would make this test pass or fail
+        depending on whose machine it runs on.
+        """
+        body = await self._config(monkeypatch, "false")
+        assert body["demo_mode"] is False
+        assert body["demo_warning"] is None
+
+    async def test_config_returns_a_warning_in_demo_mode(self, monkeypatch):
+        body = await self._config(monkeypatch, "true")
+        assert body["demo_mode"] is True
+        assert body["demo_warning"]
+        # The text must name the concrete action, not the abstract mode.
+        assert "pasport" in body["demo_warning"].lower()
+
+    async def test_config_exposes_no_secrets(self, monkeypatch):
+        body = await self._config(monkeypatch, "true")
+        forbidden = {"encryption_key", "jwt_secret", "internal_token",
+                     "database_url", "openai_api_key", "storage_secret_key"}
+        assert not forbidden & set(body)
+        blob = str(body).lower()
+        assert "sk-" not in blob and "postgres" not in blob

@@ -31,6 +31,13 @@ services:
       - key: DEBUG
         value: "false"
 
+      # MVP demo: free-tier Gemini keys, real documents refused by the PII
+      # gate. Flip to "false" once a paid key and a DPA are in place.
+      # Must match the value on ocr-ml — the API renders the user-facing
+      # warning from its own setting.
+      - key: DEMO_MODE
+        value: "true"
+
       # Secrets: entered in the dashboard on first deploy, never in the repo.
       - key: ENCRYPTION_KEY
         sync: false
@@ -96,27 +103,39 @@ services:
     envVars:
       - key: ENVIRONMENT
         value: production
+
+      # Keep in step with ocr-api. In demo mode the cascade routes to the free
+      # tier and a genuinely real document is refused rather than sent.
+      - key: DEMO_MODE
+        value: "true"
+
       - key: INTERNAL_TOKEN
         sync: false
 
-      # Paid key. Cleared for real personal data.
+      # Paid key. Cleared for real personal data. Optional in demo mode.
       - key: OPENAI_API_KEY
         sync: false
       - key: OPENAI_MODEL
         value: gpt-4o-mini
 
-      # Paid Gemini keys ONLY. A free-tier key here would be rejected by the
-      # PII gate rather than leak, so requests would fail — but the right fix
-      # is not to configure free keys in production at all.
+      # FREE Gemini keys. Usable ONLY because DEMO_MODE=true: the gate still
+      # refuses anything that looks like a real identity document, so this is
+      # a demo-only configuration, not a way around the policy.
+      - key: GEMINI_FREE_KEYS
+        sync: false
+
+      # Paid Gemini keys, for when demo mode is switched off. Must be
+      # DIFFERENT keys from the free ones above.
       - key: GEMINI_PAID_KEYS
         sync: false
       - key: GEMINI_PAID_ENABLED
-        value: "true"
+        value: "false"
 
       - key: LLM_ENABLED
         value: "true"
-      - key: LLM_PROVIDER_ORDER
-        value: openai,gemini-paid
+      # Left unset so packages/llm/demo.py picks the order from the mode:
+      # demo puts gemini-free first, production never does.
+      # - key: LLM_PROVIDER_ORDER
       - key: LLM_DAILY_BUDGET_USD
         value: "5.0"
 
@@ -136,12 +155,13 @@ services:
           name: ocr-keyvalue
           property: connectionString
 
-      # Optional. Point at the ONNX file from training/01_classifier.ipynb;
-      # empty means the service runs without a classifier. The notebook prints
-      # the two thresholds — they are model-specific and must be updated every
-      # time it is retrained.
+      # The model is baked into the image at /srv/models by Dockerfile.ml.
+      # If models/classifier.onnx has not been committed yet the file is simply
+      # absent, the classifier disables itself, and extraction still works.
+      # Train it with training/01_classifier.ipynb (Colab T4) and commit the
+      # result — no model registry, no download at boot.
       - key: CLASSIFIER_MODEL_PATH
-        value: ""
+        value: /srv/models/classifier.onnx
       - key: CLASSIFIER_MIN_CONFIDENCE
         value: "0.60"
       - key: CLASSIFIER_MAX_ENERGY

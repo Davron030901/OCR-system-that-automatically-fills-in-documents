@@ -1,10 +1,10 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { ConsentGate } from "@/components/ConsentGate";
-import { compressImage, createJob } from "@/lib/api";
+import { compressImage, createJob, getConfig } from "@/lib/api";
 
 export default function UploadPage() {
   const router = useRouter();
@@ -12,7 +12,17 @@ export default function UploadPage() {
   const [files, setFiles] = useState<File[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [demoWarning, setDemoWarning] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Fetched, not hardcoded: the banner has to reflect what the backend is
+  // actually configured to do. If the request fails we show nothing rather
+  // than guessing — a wrong reassurance is worse than no banner.
+  useEffect(() => {
+    getConfig()
+      .then((c) => setDemoWarning(c.demo_mode ? c.demo_warning : null))
+      .catch(() => setDemoWarning(null));
+  }, []);
 
   if (!consented) return <ConsentGate onAccept={() => setConsented(true)} />;
 
@@ -33,6 +43,15 @@ export default function UploadPage() {
   return (
     <div className="space-y-5">
       <h1 className="text-xl font-semibold">Hujjat suratini yuklang</h1>
+
+      {/* Amber, above the drop zone, and unmissable. Someone about to
+          photograph their passport needs this before they tap, not after. */}
+      {demoWarning && (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 p-4">
+          <p className="font-medium text-amber-900">⚠️ Demo rejim</p>
+          <p className="mt-1 text-sm text-amber-900">{demoWarning}</p>
+        </div>
+      )}
 
       <div
         onDragOver={(e) => e.preventDefault()}

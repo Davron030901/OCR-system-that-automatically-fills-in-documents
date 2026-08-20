@@ -10,6 +10,22 @@ async function json<T>(res: Response): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+export interface ClientConfig {
+  demo_mode: boolean;
+  demo_warning: string | null;
+  pdf_output: boolean;
+  max_upload_bytes: number;
+}
+
+/** Read demo mode from the SERVER, not from a build-time flag.
+ *
+ *  A NEXT_PUBLIC_ flag would be baked into the bundle at build time and would
+ *  keep claiming production behaviour after someone switched the backend to
+ *  free-tier keys — exactly when the warning matters most. */
+export async function getConfig(): Promise<ClientConfig> {
+  return json(await fetch(`${BASE}/api/v1/config`, { cache: "no-store" }));
+}
+
 export async function createJob(files: File[]): Promise<{ job_id: string }> {
   const form = new FormData();
   files.forEach((f) => form.append("files", f));

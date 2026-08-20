@@ -70,7 +70,7 @@ tekshirishdan o'tib ketadi.
 ```bash
 make env      # .env yaratadi va maxfiy so'zlarni generatsiya qiladi
 make dev      # api, ml-service, db, storage, web
-make test     # virtualenv yaratib, 276 testni ishga tushiradi
+make test     # virtualenv yaratib, 300 testni ishga tushiradi
 ```
 
 `make test` birinchi navbatda `tests/` ni ishga tushiradi — u har uchala
@@ -140,8 +140,13 @@ CLASSIFIER_MIN_CONFIDENCE=0.612
 CLASSIFIER_MAX_ENERGY=-3.104
 ```
 
-Ularni `.env` ga ko'chiring. Model qayta o'rgatilganda chegaralar ham qayta
-hisoblanishi **shart** — ular validatsiya taqsimotidan olinadi.
+Ularni `.env` ga (yoki Render env'iga) ko'chiring. Model qayta o'rgatilganda
+chegaralar ham qayta hisoblanishi **shart** — ular validatsiya taqsimotidan
+olinadi.
+
+Model **repo ichida** saqlanadi: Colab → yuklab olish → `models/` →
+`git commit`. Lokal kompyuterda training yo'q, Hugging Face yo'q, boot
+paytida yuklab olish yo'q. Tafsilotlar: `models/README.md`.
 
 Model yo'q bo'lsa tizim ishlashda davom etadi: klassifikator o'chadi, pipeline
 chaqiruvchining `doc_type` maslahatiga tayanadi. `/readyz` da `"classifier"`
@@ -187,6 +192,25 @@ tushadi, shuning uchun unda faqat bo'sh joy tutuvchilar bo'lishi kerak.
 L2 asosiy, L3 ~10% bo'lganda 1000 hujjat oyiga taxminan $1–7 turadi
 (model tanloviga qarab). Narxlar va model nomlari konfiguratsiyada saqlanadi,
 kodda emas — provayderlar model qatorini tez-tez almashtiradi.
+
+## MVP: demo rejim
+
+MVP bepul Gemini kalitlari bilan ishlaydi. `DEMO_MODE=true` bo'lganda:
+
+- LLM so'rovlari bepul tier'ga yo'naltiriladi
+- UI'da "real pasport yuklamang" ogohlantirishi chiqadi
+- **Real hujjat yuklansa — rad etiladi, yuborilmaydi**
+
+Oxirgi punkt muhim va u demo modulidan emas, PII darvozasidan keladi. Demo
+rejim so'rovni "sintetik" deb belgilaydi, `PIIGate` esa haqiqiy yukni
+tekshiradi: JSHSHIR yoki hujjat raqami topilsa so'rov to'xtatiladi. Ya'ni
+demo rejimning buzilish usuli — **rad etish**, oshkor qilish emas.
+
+MRZ (L0) va qoidalar (L1) lokal ishlaydi, shuning uchun demo pasportning
+mashina o'qiydigan zonasini pullik kalitsiz ham o'qiy oladi.
+
+Prod'ga o'tish uchta o'zgaruvchi: `DEMO_MODE=false`, pullik
+`OPENAI_API_KEY`, bo'sh `GEMINI_FREE_KEYS`. Kod o'zgarmaydi.
 
 ## Deploy
 

@@ -252,11 +252,25 @@ class ExtractionPipeline:
                 apply_mapping(result, mapping, FieldSource.LLM_TEXT, 0.70)
                 result.llm_cost_usd += cost
                 result.stages_used.append("L2_llm_text")
-            except Exception:                          # noqa: BLE001
+            except Exception as exc:                   # noqa: BLE001
                 # The LLM layer is an enhancement, never a hard dependency.
-                result.warnings.append(
-                    "Qo'shimcha tahlil qatlami mavjud emas — natija faqat "
-                    "lokal o'qish asosida")
+                # A policy refusal is reported differently from an outage:
+                # "the service is down" and "this deployment will not accept
+                # your real passport" call for completely different actions
+                # from the person holding the document.
+                # Imported here rather than at module scope: this module is
+                # otherwise independent of packages.llm, and keeping it that
+                # way means the pipeline still runs where the LLM layer is not
+                # installed at all.
+                from packages.llm.base import PIIPolicyViolation
+                from packages.llm.demo import DEMO_REFUSAL_UZ
+                if isinstance(exc, PIIPolicyViolation):
+                    result.warnings.append(DEMO_REFUSAL_UZ)
+                    result.stages_used.append("L2_refused_policy")
+                else:
+                    result.warnings.append(
+                        "Qo'shimcha tahlil qatlami mavjud emas — natija faqat "
+                        "lokal o'qish asosida")
             result.timings.append(StageTiming(stage="L2_llm_text", ms=int((time.time() - t0) * 1000)))
 
         # --- L3: vision model, last resort -----------------------------------

@@ -48,6 +48,12 @@ class Settings(BaseSettings):
     llm_daily_budget_usd: float = 5.0
     enable_l3_vision: bool = False   # sends the image off-premises: opt in
 
+    # Demo deployments run on free-tier LLM keys and must not process real
+    # documents. This does NOT relax the PII gate: a real passport uploaded to
+    # a demo is refused by packages/llm/pii_gate.py, not quietly forwarded.
+    # See packages/llm/demo.py for why the failure mode is a refusal.
+    demo_mode: bool = False
+
     cors_origins: str = "http://localhost:3000"
 
     @property
