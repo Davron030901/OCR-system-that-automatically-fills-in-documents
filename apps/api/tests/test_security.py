@@ -205,3 +205,49 @@ class TestDemoModeExposure:
         assert not forbidden & set(body)
         blob = str(body).lower()
         assert "sk-" not in blob and "postgres" not in blob
+
+
+class TestServiceUrlNormalisation:
+    """Internal service URLs must carry a scheme before httpx sees them.
+
+    Render's blueprint `property: hostport` resolves to "host:port" with no
+    scheme. httpx raises UnsupportedProtocol on that rather than assuming
+    http, and because the job runner catches every exception and reports a
+    generic PROCESSING_FAILED, the real cause never reaches a log the user
+    or the operator reads. It cost a live debugging session to find, which is
+    exactly the kind of failure worth pinning with a test.
+    """
+
+    @staticmethod
+    def _settings(monkeypatch, **env):
+        from app.config import Settings, get_settings
+        for k, v in env.items():
+            monkeypatch.setenv(k, v)
+        get_settings.cache_clear()
+        try:
+            return Settings()
+        finally:
+            get_settings.cache_clear()
+
+    def test_bare_hostport_gets_http_scheme(self, monkeypatch):
+        s = self._settings(monkeypatch, ML_SERVICE_URL="ocr-ml-s16d:8100")
+        assert s.ml_service_url == "http://ocr-ml-s16d:8100"
+
+    def test_existing_scheme_is_left_alone(self, monkeypatch):
+        s = self._settings(monkeypatch, ML_SERVICE_URL="https://ml.example.com")
+        assert s.ml_service_url == "https://ml.example.com"
+
+    def test_trailing_slash_is_stripped(self, monkeypatch):
+        """`f"{url}/extract"` would otherwise produce a double slash."""
+        s = self._settings(monkeypatch, ML_SERVICE_URL="http://ocr-ml:8100/")
+        assert s.ml_service_url == "http://ocr-ml:8100"
+        assert f"{s.ml_service_url}/extract" == "http://ocr-ml:8100/extract"
+
+    def test_converter_url_is_normalised_too(self, monkeypatch):
+        s = self._settings(monkeypatch, CONVERTER_URL="ocr-converter-x:8200")
+        assert s.converter_url == "http://ocr-converter-x:8200"
+
+    def test_empty_stays_empty(self, monkeypatch):
+        """An unset optional service must not become the string 'http://'."""
+        s = self._settings(monkeypatch, CONVERTER_URL="")
+        assert s.converter_url == ""

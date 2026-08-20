@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -59,6 +60,25 @@ class Settings(BaseSettings):
     @property
     def cors_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    # Render's blueprint `property: hostport` resolves to "host:port" with no
+    # scheme, so the value arrives as "ocr-ml-s16d:8100". httpx rejects that
+    # with UnsupportedProtocol rather than assuming http, and the failure
+    # surfaces to the user as a generic "processing failed" — the request
+    # never leaves the API. Normalising here fixes it for every caller at once
+    # and keeps working whichever form the environment supplies.
+    @field_validator("ml_service_url", "converter_url", mode="after")
+    @classmethod
+    def _ensure_scheme(cls, v: str) -> str:
+        v = v.strip().rstrip("/")
+        if not v:
+            return v
+        if v.startswith(("http://", "https://")):
+            return v
+        # Private services on Render speak plain HTTP inside the private
+        # network; TLS terminates at the public edge, which these never touch.
+        return f"http://{v}"
+
 
 
 @lru_cache
