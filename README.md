@@ -188,6 +188,16 @@ L2 asosiy, L3 ~10% bo'lganda 1000 hujjat oyiga taxminan $1–7 turadi
 (model tanloviga qarab). Narxlar va model nomlari konfiguratsiyada saqlanadi,
 kodda emas — provayderlar model qatorini tez-tez almashtiradi.
 
+## Deploy
+
+Render (backend) + Vercel (frontend) uchun bosqichma-bosqich qo'llanma:
+**`docs/DEPLOY.md`**. Blueprint `infra/render.yaml` to'rtala servisni bir
+vaqtda yaratadi; frontend'da yagona muhim sozlama — Vercel'dagi Root
+Directory `apps/web` bo'lishi.
+
+⚠️ LLM kalitlari `ocr-ml` servisida bo'ladi, `ocr-api` da emas: `packages/llm`
+aynan shu servis ichida ishlaydi.
+
 ## ⚠️ Ishga tushirishdan oldin
 
 `docs/LEGAL.md` ni o'qing. O'zbekiston fuqarolarining shaxsga doir

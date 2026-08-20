@@ -5,46 +5,152 @@
 # located in Uzbekistan. Render's regions do not satisfy that. This blueprint
 # is appropriate for demo and testing; production needs local hosting or the
 # on-prem bundle in infra/onprem/.
+#
+# Step-by-step instructions: docs/DEPLOY.md
+#
+# Frankfurt is the closest region Render offers to Uzbekistan, so it is the
+# default here. A service's region cannot be changed after creation — the
+# service has to be recreated — so decide before the first deploy.
+region: frankfurt
+
 services:
+  # ── Public API ──────────────────────────────────────────────────────────
+  # The only service reachable from the internet. It carries no model and no
+  # LibreOffice, which is what keeps the image small and the cold start short.
   - type: web
     name: ocr-api
     runtime: docker
     dockerfilePath: ./infra/Dockerfile.api
-    plan: starter          # free tier's 512 MB and cold starts are too tight
+    # The free tier gives 512 MB and spins down after 15 minutes idle. A
+    # spun-down API turns a 6-second extraction into a 60-second one.
+    plan: starter
     healthCheckPath: /healthz
     envVars:
       - key: ENVIRONMENT
         value: production
+      - key: DEBUG
+        value: "false"
+
+      # Secrets: entered in the dashboard on first deploy, never in the repo.
       - key: ENCRYPTION_KEY
-        sync: false        # set in the dashboard, never in the repo
+        sync: false
       - key: JWT_SECRET
         sync: false
       - key: INTERNAL_TOKEN
         sync: false
-      - key: OPENAI_API_KEY
-        sync: false
-      - key: GEMINI_PAID_KEYS
-        sync: false
-      - key: DATABASE_URL
-        sync: false        # Supabase or Neon; Render's free DB expires
-      - key: ML_SERVICE_URL
-        fromService: { type: pserv, name: ocr-ml, property: hostport }
-      - key: CONVERTER_URL
-        fromService: { type: pserv, name: ocr-converter, property: hostport }
 
+      # Neon or Supabase. Render's own free Postgres expires after 30 days,
+      # and takes the encrypted extractions with it.
+      # Must be the asyncpg driver URL: postgresql+asyncpg://...
+      - key: DATABASE_URL
+        sync: false
+
+      # S3-compatible object storage (Cloudflare R2 or Backblaze B2).
+      - key: STORAGE_ENDPOINT
+        sync: false
+      - key: STORAGE_BUCKET
+        sync: false
+      - key: STORAGE_ACCESS_KEY
+        sync: false
+      - key: STORAGE_SECRET_KEY
+        sync: false
+
+      # The Vercel frontend origin. Chicken-and-egg on the first deploy: put a
+      # placeholder here, deploy the frontend, then come back with the real
+      # domain. A wrong value shows up as a browser CORS error, not a 500.
+      - key: CORS_ORIGINS
+        sync: false
+
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: ocr-keyvalue
+          property: connectionString
+      - key: ML_SERVICE_URL
+        fromService:
+          type: pserv
+          name: ocr-ml
+          property: hostport
+      - key: CONVERTER_URL
+        fromService:
+          type: pserv
+          name: ocr-converter
+          property: hostport
+
+      # false hides the PDF button entirely and lets you skip the converter
+      # service below.
+      - key: ENABLE_PDF_OUTPUT
+        value: "true"
+
+  # ── ML inference (private) ──────────────────────────────────────────────
+  # Not reachable from the internet: only ocr-api can call it, over Render's
+  # private network, and it still checks INTERNAL_TOKEN on every request.
+  #
+  # The LLM keys live HERE, not on the API. packages/llm runs inside this
+  # service — the API never talks to a model provider.
   - type: pserv
     name: ocr-ml
     runtime: docker
     dockerfilePath: ./infra/Dockerfile.ml
     plan: starter
     envVars:
+      - key: ENVIRONMENT
+        value: production
       - key: INTERNAL_TOKEN
         sync: false
+
+      # Paid key. Cleared for real personal data.
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-4o-mini
+
+      # Paid Gemini keys ONLY. A free-tier key here would be rejected by the
+      # PII gate rather than leak, so requests would fail — but the right fix
+      # is not to configure free keys in production at all.
+      - key: GEMINI_PAID_KEYS
+        sync: false
+      - key: GEMINI_PAID_ENABLED
+        value: "true"
+
       - key: LLM_ENABLED
         value: "true"
+      - key: LLM_PROVIDER_ORDER
+        value: openai,gemini-paid
+      - key: LLM_DAILY_BUDGET_USD
+        value: "5.0"
+
+      # Stage L3 sends the document IMAGE to a provider. Off by default: that
+      # should be a deliberate decision with a legal basis behind it.
       - key: ENABLE_L3_VISION
         value: "false"
 
+      # The response cache holds model output about real documents, so it is
+      # encrypted at rest. Without a key the service refuses to cache in
+      # production rather than storing PII in plaintext.
+      - key: LLM_CACHE_KEY
+        sync: false
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: ocr-keyvalue
+          property: connectionString
+
+      # Optional. Point at the ONNX file from training/01_classifier.ipynb;
+      # empty means the service runs without a classifier. The notebook prints
+      # the two thresholds — they are model-specific and must be updated every
+      # time it is retrained.
+      - key: CLASSIFIER_MODEL_PATH
+        value: ""
+      - key: CLASSIFIER_MIN_CONFIDENCE
+        value: "0.60"
+      - key: CLASSIFIER_MAX_ENERGY
+        value: "-2.0"
+
+  # ── Document converter (private, optional) ──────────────────────────────
+  # LibreOffice, ~700 MB. Needed only for legacy .doc templates and PDF
+  # output. With .docx templates and ENABLE_PDF_OUTPUT=false, delete this
+  # service and the CONVERTER_URL reference above.
   - type: pserv
     name: ocr-converter
     runtime: docker
@@ -54,7 +160,14 @@ services:
       - key: INTERNAL_TOKEN
         sync: false
 
-  - type: redis
-    name: ocr-redis
+  # ── Key Value (Redis-compatible) ────────────────────────────────────────
+  # Backs the LLM response cache. `ipAllowList: []` means no public access at
+  # all — only services on this account's private network can connect.
+  - type: keyvalue
+    name: ocr-keyvalue
     plan: starter
     ipAllowList: []
+    # The cache is a cost optimisation, never a source of truth, so evicting
+    # under memory pressure is correct. It also bounds how long PII can sit
+    # here if a TTL is ever misconfigured.
+    maxmemoryPolicy: allkeys-lru

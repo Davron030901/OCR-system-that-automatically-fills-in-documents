@@ -6,6 +6,34 @@ Next.js `public/` papkasini talab qilmaydi, va bo'sh papka git'da saqlanmaydi.
 Tuzatildi: `apps/web/public/.gitkeep` qo'shildi va `Dockerfile.web` builder
 bosqichida `mkdir -p public` bajaradi.
 
+## `AssertionError: Status code 204 must not have a response body` (api ishga tushmaydi)
+
+Konteyner qurildi, lekin `api-1` import paytida yiqiladi:
+
+```
+File "/srv/apps/api/app/routers/jobs.py", line 220, in <module>
+    @router.delete("/{job_id}", status_code=204)
+AssertionError: Status code 204 must not have a response body
+```
+
+Sabab nozik. `jobs.py` da `from __future__ import annotations` bor, shuning
+uchun `-> None` annotatsiyasi FastAPI ga **`"None"` satri** sifatida yetadi.
+FastAPI uni `NoneType` ga aylantiradi — bu esa klass obyekti, ya'ni *truthy*.
+Natijada FastAPI "route'da javob tanasi bor" deb hisoblaydi va 204 uchun
+assert qiladi.
+
+Tuzatish — `response_model=None` ni ochiq yozish:
+
+```python
+@router.delete("/{job_id}", status_code=204, response_model=None)
+async def delete_job(...) -> None:
+```
+
+Bu xato faqat import paytida chiqadi, shuning uchun unit testlar yashil
+bo'lib turaveradi. Endi `tests/test_service_startup.py` har uchala ilovani
+import qiladi va `make test` shu turdagi xatoni ikki soniyada topadi —
+to'rt daqiqalik build'dan keyin emas.
+
 ## `make: pytest: No such file or directory`
 
 Makefile hostda o'rnatilgan Python muhitini kutar edi. Endi `make test`
@@ -132,3 +160,9 @@ docker compose -f infra/docker-compose.yml up -d web
 Loyihani `/mnt/c/...` da emas, WSL fayl tizimida (`~/projects/...`) saqlang.
 `/mnt/c` orqali Docker bind mount va npm install bir necha barobar sekin
 ishlaydi.
+
+## Render / Vercel deploy muammolari
+
+Deploy bosqichidagi xatolar (CORS, `No Next.js version detected`,
+`asyncio extension requires an async driver`, Docker konteksti) alohida
+hujjatda: **`docs/DEPLOY.md`**, 8-bo'lim.
