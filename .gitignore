@@ -6,6 +6,7 @@ __pycache__/
 node_modules/
 .next/
 dist/
+_to_delete/
 # Training checkpoints and stray exports stay out of the repo...
 *.onnx
 *.pt
