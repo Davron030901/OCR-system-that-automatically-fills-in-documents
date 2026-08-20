@@ -8,10 +8,14 @@
 #
 # Step-by-step instructions: docs/DEPLOY.md
 #
-# Frankfurt is the closest region Render offers to Uzbekistan, so it is the
-# default here. A service's region cannot be changed after creation — the
-# service has to be recreated — so decide before the first deploy.
-region: frankfurt
+# Frankfurt is the closest region Render offers to Uzbekistan, so every
+# service below sets `region: frankfurt` individually. There is no top-level
+# `region:` key in a blueprint — putting one there makes the whole file fail
+# to parse, and Render reports it as "0 services".
+#
+# A service's region cannot be changed after creation (the service has to be
+# recreated), so decide before the first deploy. All four must match, or the
+# private network between them does not work.
 
 services:
   # ── Public API ──────────────────────────────────────────────────────────
@@ -24,6 +28,7 @@ services:
     # The free tier gives 512 MB and spins down after 15 minutes idle. A
     # spun-down API turns a 6-second extraction into a 60-second one.
     plan: starter
+    region: frankfurt
     healthCheckPath: /healthz
     envVars:
       - key: ENVIRONMENT
@@ -100,6 +105,7 @@ services:
     runtime: docker
     dockerfilePath: ./infra/Dockerfile.ml
     plan: starter
+    region: frankfurt
     envVars:
       - key: ENVIRONMENT
         value: production
@@ -176,6 +182,7 @@ services:
     runtime: docker
     dockerfilePath: ./infra/Dockerfile.converter
     plan: starter
+    region: frankfurt
     envVars:
       - key: INTERNAL_TOKEN
         sync: false
@@ -186,6 +193,7 @@ services:
   - type: keyvalue
     name: ocr-keyvalue
     plan: starter
+    region: frankfurt
     ipAllowList: []
     # The cache is a cost optimisation, never a source of truth, so evicting
     # under memory pressure is correct. It also bounds how long PII can sit
